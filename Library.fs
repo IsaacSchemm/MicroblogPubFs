@@ -49,6 +49,13 @@ type AttachedVideo = {
     TitleText: string
 }
 
+type ActivityBarAction = {
+    Action: string
+    ApObjectId: string
+    CsrfToken: string
+    SubimtValue: string
+}
+
 type Post = {
     ShareContext: ShareContext list
     Actor: Actor
@@ -60,6 +67,7 @@ type Post = {
     Videos: AttachedVideo list
     Permalink: Uri
     PublishedAt: DateTimeOffset
+    Actions: ActivityBarAction list
 }
 
 module Util =
@@ -139,6 +147,15 @@ module Util =
                     h_entry |> single ".object-permalink.u-url" |> attrVal "href" |> Uri
                 PublishedAt =
                     h_entry |> single ".dt-published" |> attrVal "datetime" |> parseDate
+                Actions = [
+                    for form in h_entry.CssSelect(".activity-bar form") do
+                        {
+                            Action = form |> attrVal "action"
+                            ApObjectId = form |> single "input[name=ap_object_id]" |> attrVal "value"
+                            CsrfToken = form |> single "input[name=csrf_token]" |> attrVal "value"
+                            SubimtValue = form |> single "input[type=submit]" |> attrVal "value"
+                        }
+                ]
             }
         ]
 
