@@ -5,17 +5,6 @@ open System.Net
 open System.Net.Http
 open FSharp.Data
 
-type ICredentials =
-    abstract member Password: string
-
-type NumberedPaging =
-| FirstPage
-| Page of int
-
-type CursorPaging =
-| FirstPage
-| Page of string
-
 type Actor = {
     Link: Uri
     IconUri: Uri
@@ -25,17 +14,6 @@ type Actor = {
 
 type Sharer = {
     Link: Uri
-}
-
-type ShareContext = {
-    SharedAt: DateTimeOffset
-    SharedBy: Sharer
-}
-
-type OpenGraphMeta = {
-    ImageUris: Uri list
-    Link: Uri
-    Title: string
 }
 
 type AttachedPhoto = {
@@ -57,14 +35,13 @@ type ActivityBarAction = {
 }
 
 type Post = {
-    ShareContext: ShareContext list
+    SharedAt: Nullable<DateTimeOffset>
+    IsReply: bool
     Actor: Actor
-    ContentWarnings: string list
+    ContentWarning: string
     Html: string
-    OpenGraphMeta: OpenGraphMeta list
     HasAttachments: bool
     Photos: AttachedPhoto list
-    Videos: AttachedVideo list
     Permalink: Uri
     PublishedAt: DateTimeOffset
     Actions: ActivityBarAction list
@@ -95,37 +72,24 @@ module Util =
         for h_entry in h_feed do
             let u_url = h_entry |> single ".actor-box .u-url"
             {
-                ShareContext = [
-                    for shared_header in h_entry.CssSelect(".shared-header") do
-                        {
-                            SharedAt = shared_header |> single "span" |> attrVal "title" |> parseDate
-                            SharedBy = {
-                                Link = shared_header |> single "a" |> attrVal "href" |> Uri
-                            }
-                        }
-                ]
+                SharedAt =
+                    match h_entry.CssSelect(".shared-header") with
+                    | shared_header::_ ->
+                        Nullable (shared_header |> single "span" |> attrVal "title" |> parseDate)
+                    | [] ->
+                        Nullable()
+                IsReply = h_entry.CssSelect(".in-reply-to") <> []
                 Actor = {
                     Link = new Uri(u_url |> attrVal "href")
                     IconUri = new Uri(h_entry |> single ".actor-box .actor-icon" |> attrVal "src")
                     DisplayName = u_url |> single "strong" |> innerText
                     Handle = u_url |> single ".actor-handle" |> innerText
                 }
-                ContentWarnings = [
-                    for summary in h_entry.CssSelect("summary") do
-                        summary.InnerText()
-                ]
+                ContentWarning =
+                    match h_entry.CssSelect("summary") with
+                    | summary::_ -> summary.InnerText()
+                    | _ -> null
                 Html = h_entry |> single ".e-content" |> innerHtml
-                OpenGraphMeta = [
-                    for activity_og_meta in h_entry.CssSelect(".activity-og-meta") do
-                        {
-                            ImageUris = [
-                                for img in activity_og_meta.CssSelect("img") do
-                                    img |> attrVal "src" |> Uri
-                            ]
-                            Link = activity_og_meta |> single "a" |> attrVal "href" |> Uri
-                            Title = activity_og_meta |> single "a" |> innerText
-                        }
-                ]
                 HasAttachments = h_entry.CssSelect(".attachment-item") <> []
                 Photos = [
                     for link in h_entry.CssSelect(".attachment-item a.media-link") do
@@ -136,25 +100,19 @@ module Util =
                                 TitleText = img |> attrVal "title"
                             }
                 ]
-                Videos = [
-                    for video in h_entry.CssSelect(".attachment-item video.u-video") do
-                        {
-                            Src = new Uri(video |> attrVal "src")
-                            TitleText = video |> attrVal "title"
-                        }
-                ]
                 Permalink =
                     h_entry |> single ".object-permalink.u-url" |> attrVal "href" |> Uri
                 PublishedAt =
                     h_entry |> single ".dt-published" |> attrVal "datetime" |> parseDate
                 Actions = [
                     for form in h_entry.CssSelect(".activity-bar form") do
-                        {
-                            Action = form |> attrVal "action"
-                            ApObjectId = form |> single "input[name=ap_object_id]" |> attrVal "value"
-                            CsrfToken = form |> single "input[name=csrf_token]" |> attrVal "value"
-                            SubimtValue = form |> single "input[type=submit]" |> attrVal "value"
-                        }
+                        if form |> attrVal "method" = "POST" then
+                            {
+                                Action = form |> attrVal "action"
+                                ApObjectId = form |> single "input[name=ap_object_id]" |> attrVal "value"
+                                CsrfToken = form |> single "input[name=csrf_token]" |> attrVal "value"
+                                SubimtValue = form |> single "input[type=submit]" |> attrVal "value"
+                            }
                 ]
             }
         ]
@@ -167,11 +125,9 @@ module Public =
 
     let httpClient = new HttpClient(httpClientHandler)
 
-    let GetFeedAsync paging = task {
+    let GetFeedAsync page = task {
         let queryString = String.concat "&" [
-            match paging with
-            | NumberedPaging.FirstPage -> ()
-            | NumberedPaging.Page n -> sprintf "page=%d" n
+            sprintf "page=%d" page
         ]
         let! resp = httpClient.GetAsync($"https://microblog.lakora.us/?{queryString}")
         resp.EnsureSuccessStatusCode() |> ignore
